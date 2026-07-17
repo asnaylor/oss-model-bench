@@ -103,6 +103,7 @@ def build_agentic_profile_command(
         str(dataset_path),
         "--custom-dataset-type",
         "mooncake_trace",
+        "--no-fixed-schedule",
         "--concurrency",
         "1,4",
         "--warmup-duration",

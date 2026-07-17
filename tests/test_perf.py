@@ -32,6 +32,8 @@ class PerformanceTests(unittest.TestCase):
         agentic = build_agentic_profile_command(target, Path("run"), Path("trace/dataset.jsonl"), duration=10)
         self.assertEqual(agentic[agentic.index("--server-metrics") + 1], target.server_metrics_url)
         self.assertNotIn("--no-server-metrics", agentic)
+        self.assertIn("--no-fixed-schedule", agentic)
+        self.assertEqual(agentic[agentic.index("--concurrency") + 1], "1,4")
 
     def test_agentic_context_is_capped_at_200k(self) -> None:
         target = self._target(Path("results"), context_limit=300000)

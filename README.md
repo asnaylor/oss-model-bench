@@ -71,7 +71,7 @@ The baseline runs six independent AIPerf profiles:
 - concurrency: 1, 4, and 16 for each shape;
 - 15-second warmup and 60-second measurement per profile.
 
-It then uses AIPerf's Agentic Code generator to create four deterministic multi-turn sessions and replays them as a Mooncake trace. This exercises shared system/tool prefixes, repository context, growing history, and KV-cache reuse at concurrency 1 and 4 for five minutes.
+It then uses AIPerf's Agentic Code generator to create four deterministic multi-turn sessions and loads them as a Mooncake trace. OMB explicitly disables fixed-schedule timing for this profile so AIPerf can run the intended concurrency 1 and 4 sweep; session structure and cache-aware context growth remain in the dataset, while its synthetic absolute timestamps are ignored. This exercises shared system/tool prefixes, repository context, growing history, and KV-cache reuse for five minutes per concurrency value.
 
 Useful shorter commands are:
 
