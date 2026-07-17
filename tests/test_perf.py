@@ -34,6 +34,8 @@ class PerformanceTests(unittest.TestCase):
         self.assertNotIn("--no-server-metrics", agentic)
         self.assertIn("--no-fixed-schedule", agentic)
         self.assertEqual(agentic[agentic.index("--concurrency") + 1], "1,4")
+        self.assertEqual(agentic[agentic.index("--num-warmup-sessions") + 1], "1")
+        self.assertNotIn("--warmup-duration", agentic)
 
     def test_agentic_context_is_capped_at_200k(self) -> None:
         target = self._target(Path("results"), context_limit=300000)
