@@ -1,0 +1,24 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "oss-model-bench"
+version = "0.1.0"
+description = "Fast, agent-focused benchmarks for OpenAI-compatible model endpoints"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = { text = "MIT" }
+authors = [{ name = "oss-model-bench contributors" }]
+dependencies = []
+
+[project.optional-dependencies]
+perf = ["aiperf==0.11.0"]
+agent = ["bfcl-eval==2026.3.23", "datasets>=4.6,<5", "swebench==4.1.0"]
+all = ["aiperf==0.11.0", "bfcl-eval==2026.3.23", "datasets>=4.6,<5", "swebench==4.1.0"]
+
+[project.scripts]
+omb = "oss_model_bench.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/oss_model_bench"]
