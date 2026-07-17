@@ -13,6 +13,8 @@ BASELINE_WORKLOADS = (
     {"name": "code", "isl": 4096, "osl": 512},
 )
 CONCURRENCIES = (1, 4, 16)
+AGENTIC_CONCURRENCIES = (1, 4)
+AGENTIC_WARMUP_TIMEOUT_SECONDS = 600
 
 
 def _aiperf_url(base_url: str) -> str:
@@ -95,9 +97,10 @@ def build_agentic_profile_command(
     run_dir: Path,
     dataset_path: Path,
     *,
+    concurrency: int = 1,
     duration: int = 300,
 ) -> list[str]:
-    artifact_dir = run_dir / "native" / "aiperf" / "agentic"
+    artifact_dir = run_dir / "native" / "aiperf" / f"agentic-c{concurrency}"
     return _common_args(target, artifact_dir) + [
         "--input-file",
         str(dataset_path),
@@ -105,7 +108,7 @@ def build_agentic_profile_command(
         "mooncake_trace",
         "--no-fixed-schedule",
         "--concurrency",
-        "1,4",
+        str(concurrency),
         "--num-warmup-sessions",
         "1",
         "--benchmark-duration",
@@ -114,6 +117,25 @@ def build_agentic_profile_command(
         "60",
         "--random-seed",
         "42",
+    ]
+
+
+def build_agentic_profile_commands(
+    target: TargetConfig,
+    run_dir: Path,
+    dataset_path: Path,
+    *,
+    duration: int = 300,
+) -> list[list[str]]:
+    return [
+        build_agentic_profile_command(
+            target,
+            run_dir,
+            dataset_path,
+            concurrency=concurrency,
+            duration=duration,
+        )
+        for concurrency in AGENTIC_CONCURRENCIES
     ]
 
 
@@ -195,17 +217,27 @@ def run_performance(
         if synth.returncode == 0:
             datasets = sorted(trace_dir.glob("**/dataset.jsonl")) if not dry_run else []
             dataset_path = datasets[-1] if datasets else trace_dir / "<generated>" / "dataset.jsonl"
-            profile = run_command(
-                build_agentic_profile_command(target, run_dir, dataset_path, duration=agentic_duration),
-                env=env,
-                stdout_path=run_dir / "logs" / "agentic-profile.out",
-                stderr_path=run_dir / "logs" / "agentic-profile.err",
-                timeout=(2 * agentic_duration) + 300,
-                dry_run=dry_run,
-                secrets=(target.api_key,),
-                announce="agentic profile",
+            profile_commands = build_agentic_profile_commands(
+                target,
+                run_dir,
+                dataset_path,
+                duration=agentic_duration,
             )
-            command_results.append(profile.__dict__)
+            for index, command in enumerate(profile_commands):
+                concurrency = command[command.index("--concurrency") + 1]
+                profile = run_command(
+                    command,
+                    env=env,
+                    stdout_path=run_dir / "logs" / f"agentic-c{concurrency}.out",
+                    stderr_path=run_dir / "logs" / f"agentic-c{concurrency}.err",
+                    timeout=agentic_duration + AGENTIC_WARMUP_TIMEOUT_SECONDS,
+                    dry_run=dry_run,
+                    secrets=(target.api_key,),
+                    announce=f"agentic profile {index + 1}/{len(profile_commands)} (c{concurrency})",
+                )
+                command_results.append(profile.__dict__)
+                if profile.returncode != 0:
+                    break
 
     failed = [item for item in command_results if item["returncode"] != 0]
     summary = {

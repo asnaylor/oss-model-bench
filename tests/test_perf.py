@@ -7,6 +7,7 @@ from pathlib import Path
 from oss_model_bench.config import TargetConfig
 from oss_model_bench.perf import (
     build_agentic_profile_command,
+    build_agentic_profile_commands,
     build_agentic_synthesis_command,
     build_baseline_commands,
     run_performance,
@@ -33,9 +34,23 @@ class PerformanceTests(unittest.TestCase):
         self.assertEqual(agentic[agentic.index("--server-metrics") + 1], target.server_metrics_url)
         self.assertNotIn("--no-server-metrics", agentic)
         self.assertIn("--no-fixed-schedule", agentic)
-        self.assertEqual(agentic[agentic.index("--concurrency") + 1], "1,4")
+        self.assertEqual(agentic[agentic.index("--concurrency") + 1], "1")
         self.assertEqual(agentic[agentic.index("--num-warmup-sessions") + 1], "1")
         self.assertNotIn("--warmup-duration", agentic)
+
+    def test_builds_independent_agentic_profiles(self) -> None:
+        commands = build_agentic_profile_commands(
+            self._target(Path("results")),
+            Path("run"),
+            Path("trace/dataset.jsonl"),
+            duration=10,
+        )
+        self.assertEqual(len(commands), 2)
+        self.assertEqual([command[command.index("--concurrency") + 1] for command in commands], ["1", "4"])
+        self.assertEqual(
+            [Path(command[command.index("--artifact-dir") + 1]).name for command in commands],
+            ["agentic-c1", "agentic-c4"],
+        )
 
     def test_agentic_context_is_capped_at_200k(self) -> None:
         target = self._target(Path("results"), context_limit=300000)
