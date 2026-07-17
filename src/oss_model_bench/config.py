@@ -18,6 +18,7 @@ class TargetConfig:
     context_limit: int
     results_dir: Path
     api_key: str | None = None
+    server_metrics_url: str | None = None
 
     @classmethod
     def from_env(cls, *, require_key: bool = False) -> "TargetConfig":
@@ -25,6 +26,7 @@ class TargetConfig:
         model = os.getenv("OMB_MODEL")
         tokenizer = os.getenv("OMB_TOKENIZER") or model
         api_key = os.getenv("OMB_API_KEY") or os.getenv("OPENAI_API_KEY")
+        server_metrics_url = os.getenv("OMB_SERVER_METRICS_URL")
         context_raw = os.getenv("OMB_CONTEXT_LIMIT", "131072")
         results_dir = Path(os.getenv("OMB_RESULTS_DIR", "results"))
 
@@ -51,6 +53,7 @@ class TargetConfig:
             context_limit=context_limit,
             results_dir=results_dir,
             api_key=api_key,
+            server_metrics_url=normalize_server_metrics_url(server_metrics_url) if server_metrics_url else None,
         )
 
     def public_dict(self) -> dict[str, object]:
@@ -71,3 +74,15 @@ def normalize_base_url(value: str) -> str:
     if parsed.username or parsed.password:
         raise ConfigError("credentials must not be embedded in OMB_BASE_URL")
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
+
+
+def normalize_server_metrics_url(value: str) -> str:
+    value = value.strip()
+    parsed = urlsplit(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ConfigError("OMB_SERVER_METRICS_URL must be an absolute http(s) URL")
+    if parsed.username or parsed.password:
+        raise ConfigError("credentials must not be embedded in OMB_SERVER_METRICS_URL")
+    if parsed.fragment:
+        raise ConfigError("OMB_SERVER_METRICS_URL must not contain a fragment")
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, parsed.query, ""))

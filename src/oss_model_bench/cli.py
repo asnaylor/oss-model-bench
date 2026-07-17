@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -11,6 +12,7 @@ from .compare import compare_summaries
 from .config import ConfigError, TargetConfig
 from .endpoint import check_target
 from .perf import run_performance
+from .summary import format_summary, latest_summary
 from .util import write_json
 
 
@@ -49,6 +51,9 @@ def build_parser() -> argparse.ArgumentParser:
     compare.add_argument("left", type=Path)
     compare.add_argument("right", type=Path)
     compare.add_argument("--output", type=Path)
+
+    summarize = subparsers.add_parser("summarize", aliases=["summary"], help="print a compact benchmark result summary")
+    summarize.add_argument("path", type=Path, nargs="?", help="summary file or run directory; defaults to the latest result")
     return parser
 
 
@@ -65,6 +70,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "compare":
             result = compare_summaries(args.left, args.right, args.output)
             print(json.dumps(result, indent=2, sort_keys=True))
+            return 0
+
+        if args.command in {"summarize", "summary"}:
+            path = args.path or latest_summary(Path(os.getenv("OMB_RESULTS_DIR", "results")))
+            print(format_summary(path))
             return 0
 
         target = TargetConfig.from_env()

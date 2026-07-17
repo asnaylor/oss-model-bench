@@ -5,6 +5,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 import time
 import uuid
 from dataclasses import dataclass
@@ -68,11 +69,15 @@ def run_command(
     timeout: float | None = None,
     dry_run: bool = False,
     secrets: Iterable[str | None] = (),
+    announce: str | None = None,
 ) -> CommandResult:
     safe_command = [redact(part, secrets) for part in command]
     if dry_run:
         print(shlex.join(safe_command))
         return CommandResult(safe_command, 0, 0.0, None, None)
+
+    if announce:
+        print(f"[omb] running {announce}: {shlex.join(safe_command)}", file=sys.stderr, flush=True)
 
     if stdout_path:
         stdout_path.parent.mkdir(parents=True, exist_ok=True)
@@ -103,10 +108,18 @@ def run_command(
             stdout_handle.close()
         if stderr_path:
             stderr_handle.close()
+    duration_seconds = round(time.monotonic() - started, 3)
+    if announce:
+        outcome = "completed" if returncode == 0 else "failed"
+        print(
+            f"[omb] {outcome} {announce}: exit={returncode} elapsed={duration_seconds:.1f}s",
+            file=sys.stderr,
+            flush=True,
+        )
     return CommandResult(
         safe_command,
         returncode,
-        round(time.monotonic() - started, 3),
+        duration_seconds,
         str(stdout_path) if stdout_path else None,
         str(stderr_path) if stderr_path else None,
     )

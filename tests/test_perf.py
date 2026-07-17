@@ -5,7 +5,12 @@ import unittest
 from pathlib import Path
 
 from oss_model_bench.config import TargetConfig
-from oss_model_bench.perf import build_agentic_synthesis_command, build_baseline_commands, run_performance
+from oss_model_bench.perf import (
+    build_agentic_profile_command,
+    build_agentic_synthesis_command,
+    build_baseline_commands,
+    run_performance,
+)
 from oss_model_bench.util import read_json
 
 
@@ -15,6 +20,18 @@ class PerformanceTests(unittest.TestCase):
         commands = build_baseline_commands(target, Path("run"), duration=10)
         self.assertEqual(len(commands), 6)
         self.assertEqual({command[command.index("--concurrency") + 1] for command in commands}, {"1", "4", "16"})
+        self.assertTrue(all("--no-server-metrics" in command for command in commands))
+
+    def test_adds_optional_server_metrics_url_to_every_profile(self) -> None:
+        target = self._target(Path("results"), server_metrics_url="http://vllm-node:8000/metrics")
+        commands = build_baseline_commands(target, Path("run"), duration=10)
+        self.assertTrue(all("--no-server-metrics" not in command for command in commands))
+        self.assertTrue(
+            all(command[command.index("--server-metrics") + 1] == target.server_metrics_url for command in commands)
+        )
+        agentic = build_agentic_profile_command(target, Path("run"), Path("trace/dataset.jsonl"), duration=10)
+        self.assertEqual(agentic[agentic.index("--server-metrics") + 1], target.server_metrics_url)
+        self.assertNotIn("--no-server-metrics", agentic)
 
     def test_agentic_context_is_capped_at_200k(self) -> None:
         target = self._target(Path("results"), context_limit=300000)
@@ -29,8 +46,20 @@ class PerformanceTests(unittest.TestCase):
             self.assertEqual(read_json(summary_path)["status"], "dry_run")
 
     @staticmethod
-    def _target(results: Path, context_limit: int = 131072) -> TargetConfig:
-        return TargetConfig("https://example.test/v1", "model", "tokenizer", context_limit, results, "top-secret")
+    def _target(
+        results: Path,
+        context_limit: int = 131072,
+        server_metrics_url: str | None = None,
+    ) -> TargetConfig:
+        return TargetConfig(
+            "https://example.test/v1",
+            "model",
+            "tokenizer",
+            context_limit,
+            results,
+            "top-secret",
+            server_metrics_url,
+        )
 
 
 if __name__ == "__main__":

@@ -34,8 +34,11 @@ def _common_args(target: TargetConfig, artifact_dir: Path) -> list[str]:
         "--streaming",
         "--artifact-dir",
         str(artifact_dir),
-        "--no-server-metrics",
     ]
+    if target.server_metrics_url:
+        command.extend(["--server-metrics", target.server_metrics_url])
+    else:
+        command.append("--no-server-metrics")
     if target.api_key:
         command.extend(["--api-key", target.api_key])
     return command
@@ -158,7 +161,9 @@ def run_performance(
     env = os.environ.copy()
 
     if phase in {"all", "baseline"}:
-        for index, command in enumerate(build_baseline_commands(target, run_dir, duration=baseline_duration)):
+        baseline_commands = build_baseline_commands(target, run_dir, duration=baseline_duration)
+        for index, command in enumerate(baseline_commands):
+            artifact_dir = Path(command[command.index("--artifact-dir") + 1])
             result = run_command(
                 command,
                 env=env,
@@ -167,6 +172,7 @@ def run_performance(
                 timeout=baseline_duration + 180,
                 dry_run=dry_run,
                 secrets=(target.api_key,),
+                announce=f"baseline {index + 1}/{len(baseline_commands)} ({artifact_dir.name})",
             )
             command_results.append(result.__dict__)
             if result.returncode != 0:
@@ -182,6 +188,7 @@ def run_performance(
             timeout=120,
             dry_run=dry_run,
             secrets=(target.api_key,),
+            announce="agentic trace synthesis",
         )
         command_results.append(synth.__dict__)
         if synth.returncode == 0:
@@ -195,6 +202,7 @@ def run_performance(
                 timeout=(2 * agentic_duration) + 300,
                 dry_run=dry_run,
                 secrets=(target.api_key,),
+                announce="agentic profile",
             )
             command_results.append(profile.__dict__)
 

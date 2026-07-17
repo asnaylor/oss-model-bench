@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from .agent_reports import collect_bfcl_report, collect_swe_generation, collect_swe_report
 from .config import TargetConfig
 from .util import read_json, require_command, run_command, run_id, utc_now, write_json
 
@@ -200,6 +201,7 @@ def _run_opencode_task(
         timeout=timeout,
         dry_run=dry_run,
         secrets=(target.api_key,),
+        announce=f"SWE task {instance_id} (OpenCode)",
     )
     intent = run_command(
         ["git", "-C", str(task_dir), "add", "--intent-to-add", "--all"],
@@ -286,6 +288,7 @@ def _grade_swe(
         stderr_path=run_dir / "logs" / "swe-grade.err",
         dry_run=dry_run,
         secrets=(api_key,),
+        announce=f"SWE-bench grading ({len(task_ids)} tasks)",
     )
     return result.__dict__
 
@@ -306,6 +309,7 @@ def run_agent_panel(
     run_dir = target.results_dir / identifier
     run_dir.mkdir(parents=True, exist_ok=True)
     commands: list[dict[str, Any]] = []
+    bfcl_report: dict[str, Any] | None = None
 
     if run_bfcl:
         if not dry_run:
@@ -320,13 +324,18 @@ def run_agent_panel(
                 timeout=1200 if index == 0 else 300,
                 dry_run=dry_run,
                 secrets=(target.api_key,),
+                announce="BFCL generation" if index == 0 else "BFCL evaluation",
             )
             commands.append(result.__dict__)
             if result.returncode != 0:
                 break
+        if not dry_run:
+            bfcl_report = collect_bfcl_report(run_dir, panel["bfcl"])
 
     task_results: list[dict[str, Any]] = []
     grade_result: dict[str, Any] | None = None
+    generation_report: dict[str, Any] | None = None
+    swe_report: dict[str, Any] | None = None
     if run_swe:
         if not dry_run:
             require_command("opencode")
@@ -371,6 +380,8 @@ def run_agent_panel(
                         }
                     )
         predictions = _write_predictions(run_dir, target, task_results)
+        if not dry_run:
+            generation_report = collect_swe_generation(run_dir, task_results)
         if grade:
             dataset_splits = {(str(row.get("dataset", DEFAULT_SWE_DATASET)), str(row.get("split", "dev"))) for row in rows}
             if len(dataset_splits) != 1:
@@ -385,11 +396,25 @@ def run_agent_panel(
                 dry_run=dry_run,
                 api_key=target.api_key,
             )
+            if not dry_run:
+                swe_report = collect_swe_report(run_dir, target.model)
 
     failed = [item for item in commands if item["returncode"] != 0]
     failed.extend(item for item in task_results if item["status"] not in {"complete", "dry_run"})
     if grade_result and grade_result["returncode"] != 0:
         failed.append(grade_result)
+    report_errors: list[str] = []
+    if not dry_run and run_bfcl and all(item["returncode"] == 0 for item in commands):
+        if not bfcl_report:
+            report_errors.append("BFCL evaluation completed without score files")
+        elif not bfcl_report.get("complete_panel", False):
+            report_errors.append("BFCL score files do not cover the configured panel")
+    if not dry_run and run_swe and grade and grade_result and grade_result["returncode"] == 0:
+        if not swe_report:
+            report_errors.append("SWE-bench grading completed without an official run report")
+        elif int(swe_report.get("total_instances", 0)) != len(task_results):
+            report_errors.append("SWE-bench run report does not cover the configured panel")
+    failed.extend(report_errors)
     summary = {
         "schema_version": 1,
         "kind": "agent_panel",
@@ -400,8 +425,12 @@ def run_agent_panel(
         "target": target.public_dict(),
         "panel": {"name": panel["name"], "path": str(panel_path)},
         "bfcl_commands": commands,
+        "bfcl_report": bfcl_report,
         "tasks": task_results,
+        "swe_generation": generation_report,
         "swe_grade": grade_result,
+        "swe_report": swe_report,
+        "report_errors": report_errors,
         "official_comparable": False,
     }
     summary_path = run_dir / "summary.json"

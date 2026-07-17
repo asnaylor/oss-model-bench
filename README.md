@@ -14,6 +14,7 @@ It does not launch vLLM, reserve GPUs, know about a particular platform, or inve
 | `omb check` | Chat, streaming, forced tool call | < 2 min |
 | `omb perf` | 1k/256 and 4k/512 at concurrency 1, 4, 16; then synthetic agentic sessions | 15–25 min |
 | `omb agent` | 50 BFCL cases and 6 OpenCode/SWE-bench tasks, 4 workers | 45–90 min |
+| `omb summarize` | Compact view of the latest or selected result | < 1 sec |
 
 The performance suite includes agentic context because context growth, prefix reuse, and KV-cache pressure are serving behavior. It remains a distinct section inside the AIPerf result, not a second benchmark framework.
 
@@ -39,9 +40,11 @@ export OMB_CONTEXT_LIMIT=131072
 export OMB_RESULTS_DIR=$PWD/results
 # Optional when the endpoint requires bearer authentication:
 export OMB_API_KEY=replace-me
+# Optional direct Prometheus endpoint for AIPerf server diagnostics:
+export OMB_SERVER_METRICS_URL=http://vllm-node:8000/metrics
 ```
 
-`OMB_TOKENIZER` defaults to `OMB_MODEL`. `OMB_API_KEY` is optional. `OPENAI_BASE_URL` and `OPENAI_API_KEY` are accepted as fallbacks. Secrets are redacted from summaries and command records, and result files are mode `0600`. When authentication is enabled, AIPerf receives the key as a CLI argument, so it can be briefly visible to other users with permission to inspect the benchmark process table; use a short-lived, least-privilege credential on shared systems.
+`OMB_TOKENIZER` defaults to `OMB_MODEL`. `OMB_API_KEY` and `OMB_SERVER_METRICS_URL` are optional. `OPENAI_BASE_URL` and `OPENAI_API_KEY` are accepted as fallbacks. Secrets are redacted from summaries and command records, and result files are mode `0600`. When authentication is enabled, AIPerf receives the key as a CLI argument, so it can be briefly visible to other users with permission to inspect the benchmark process table; use a short-lived, least-privilege credential on shared systems.
 
 Run the compatibility gate first:
 
@@ -56,6 +59,10 @@ The check fails unless chat completions, streaming, and a forced function call a
 ```bash
 uv run omb perf
 ```
+
+OMB prints each redacted AIPerf command when it starts and reports its exit status and elapsed time when it finishes. Detailed AIPerf stdout and stderr remain under the run's `logs/` directory.
+
+By default OMB disables AIPerf server-metric scraping so any OpenAI-compatible endpoint can be tested. Set `OMB_SERVER_METRICS_URL` to a Prometheus endpoint reachable from the benchmark job to collect optional serving diagnostics for every baseline and agentic profile. For vLLM this is normally the serving process's `/metrics` endpoint. These diagnostics do not replace or alter the client-observed throughput and latency results.
 
 The baseline runs six independent AIPerf profiles:
 
@@ -82,6 +89,8 @@ Treat output tokens/s together with TTFT, p90/p99 latency, inter-token latency, 
 uv run omb agent --workers 4
 ```
 
+OMB reports the start, redacted command, completion status, and elapsed time for BFCL generation/evaluation, each concurrent OpenCode SWE task, and official SWE-bench grading. Detailed output remains in the run's `logs/` directory; concurrent task progress may be interleaved and is labeled by instance ID.
+
 The bundled `panel-v1` is deliberately small and versioned. BFCL uses exact case IDs. SWE tasks use indexes from a pinned revision of the SWE-bench Lite `dev` split. OpenCode receives a temporary inline provider configuration and edits one clean checkout per task. The produced patches use the official SWE-bench prediction format.
 
 BFCL has an upstream portability constraint: its `--model` value must name a handler registered by BFCL. If the endpoint's served name is different, provide the compatible BFCL handler alias and configure the server/gateway to accept that alias:
@@ -104,6 +113,15 @@ Then copy `results/agent-*/predictions.jsonl` to a Docker host and run the offic
 ## Results and comparisons
 
 Every invocation writes a timestamped directory with `summary.json`, logs, native tool artifacts, and—where applicable—patches and predictions. Native AIPerf, BFCL, and SWE-bench files remain the source of truth.
+
+Print a compact view of the latest result, or name a specific run/file:
+
+```bash
+uv run omb summarize
+uv run omb summarize results/perf-<timestamp>-<id>
+```
+
+For performance runs this shows tokens/s, requests/s, average/p99 TTFT and ITL, p99 request latency, request counts, and errors for each profile. Agent summaries ingest BFCL's per-category score headers and the official SWE-bench run report to show correct/resolved counts, rates, failed IDs, empty patches, timeouts, and runtimes. The original native reports remain the source of truth, and OMB does not combine BFCL and SWE-bench into a synthetic score.
 
 ```text
 results/
