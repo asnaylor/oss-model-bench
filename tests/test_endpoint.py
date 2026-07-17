@@ -21,10 +21,14 @@ class EndpointTests(unittest.TestCase):
         responses = [
             (200, b'{"data":[{"id":"test-model"}]}', {"Content-Type": "application/json"}),
             (200, b'{"choices":[{"message":{"content":"OMB_OK"}}]}', {"Content-Type": "application/json"}),
-            (200, b'data: {"choices":[{"delta":{"content":"OMB"}}]}\n\ndata: [DONE]\n', {"Content-Type": "text/event-stream"}),
             (
                 200,
-                b'{"choices":[{"message":{"tool_calls":[{"function":{"name":"get_omb_status","arguments":"{}"}}]}}]}',
+                b'data: {"choices":[{"delta":{"content":"OMB"}}]}\n\ndata: {"choices":[{"delta":{"content":"_OK"}}]}\n\ndata: [DONE]\n',
+                {"Content-Type": "text/event-stream"},
+            ),
+            (
+                200,
+                b'{"choices":[{"finish_reason":"tool_calls","message":{"tool_calls":[{"function":{"name":"get_omb_status","arguments":"{\\"component\\":\\"endpoint\\"}"}}]}}]}',
                 {"Content-Type": "application/json"},
             ),
         ]
@@ -38,8 +42,8 @@ class EndpointTests(unittest.TestCase):
         target = TargetConfig("http://example.test/v1", "model", "model", 8192, Path("results"), "key")
         responses = [
             (200, b'{"data":[]}', {"Content-Type": "application/json"}),
-            (200, b'{"choices":[{"message":{"content":"ok"}}]}', {"Content-Type": "application/json"}),
-            (200, b'data: {}\n', {"Content-Type": "text/event-stream"}),
+            (200, b'{"choices":[{"message":{"content":"OMB_OK"}}]}', {"Content-Type": "application/json"}),
+            (200, b'data: {"choices":[{"delta":{"content":"OMB_OK"}}]}\n\ndata: [DONE]\n', {"Content-Type": "text/event-stream"}),
             (200, b'{"choices":[{"message":{"content":"I did it"}}]}', {"Content-Type": "application/json"}),
         ]
         with patch("oss_model_bench.endpoint._request", side_effect=responses):
@@ -47,6 +51,41 @@ class EndpointTests(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         tool_probe = next(item for item in result["probes"] if item["name"] == "tool_calling")
         self.assertIn("validation_error", tool_probe)
+
+    def test_reasoning_only_length_response_fails_chat_contract(self) -> None:
+        target = TargetConfig("http://example.test/v1", "model", "model", 8192, Path("results"), "key")
+        responses = [
+            (200, b'{"data":[]}', {"Content-Type": "application/json"}),
+            (
+                200,
+                b'{"choices":[{"finish_reason":"length","message":{"content":null,"reasoning_content":"thinking"}}]}',
+                {"Content-Type": "application/json"},
+            ),
+            (200, b'data: {"choices":[{"delta":{"content":"OMB_OK"}}]}\n\ndata: [DONE]\n', {"Content-Type": "text/event-stream"}),
+        ]
+        with patch("oss_model_bench.endpoint._request", side_effect=responses):
+            result = check_target(target, include_tools=False)
+        self.assertEqual(result["status"], "failed")
+        chat_probe = next(item for item in result["probes"] if item["name"] == "chat")
+        self.assertIn("validation_error", chat_probe)
+
+    def test_check_uses_reasoning_safe_completion_budgets(self) -> None:
+        target = TargetConfig("http://example.test/v1", "model", "model", 8192, Path("results"), "key")
+        responses = [
+            (200, b'{"data":[]}', {"Content-Type": "application/json"}),
+            (200, b'{"choices":[{"message":{"content":"OMB_OK"}}]}', {"Content-Type": "application/json"}),
+            (200, b'data: {"choices":[{"delta":{"content":"OMB_OK"}}]}\n\ndata: [DONE]\n', {"Content-Type": "text/event-stream"}),
+            (
+                200,
+                b'{"choices":[{"message":{"tool_calls":[{"function":{"name":"get_omb_status","arguments":{"component":"endpoint"}}}]}}]}',
+                {"Content-Type": "application/json"},
+            ),
+        ]
+        with patch("oss_model_bench.endpoint._request", side_effect=responses) as request:
+            check_target(target)
+        self.assertEqual(request.call_args_list[1].kwargs["payload"]["max_tokens"], 256)
+        self.assertEqual(request.call_args_list[2].kwargs["payload"]["max_tokens"], 256)
+        self.assertEqual(request.call_args_list[3].kwargs["payload"]["max_tokens"], 512)
 
 
 if __name__ == "__main__":

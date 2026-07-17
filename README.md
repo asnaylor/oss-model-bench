@@ -49,7 +49,7 @@ Run the compatibility gate first:
 uv run omb check
 ```
 
-The check fails unless chat completions, streaming, and a forced function call all succeed. `GET /models` is reported but is not a hard requirement.
+The check fails unless chat completions, streaming, and a forced function call all succeed. It allows 256 completion tokens for chat and 512 for the forced tool call so that reasoning models have room to emit their final structured answer; a reasoning-only response ending with `finish_reason: length` fails the gate. `GET /models` is reported but is not a hard requirement. Tool-call parser selection (for example, vLLM's `qwen3_coder`) is a server setting and is not configured by OMB.
 
 ## Performance
 

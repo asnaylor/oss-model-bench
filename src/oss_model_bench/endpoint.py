@@ -42,7 +42,7 @@ def _probe(name: str, operation: Any) -> dict[str, Any]:
             parsed = json.loads(decoded)
         except json.JSONDecodeError:
             parsed = None
-        return {
+        result = {
             "name": name,
             "ok": 200 <= status < 300,
             "status_code": status,
@@ -50,6 +50,12 @@ def _probe(name: str, operation: Any) -> dict[str, Any]:
             "content_type": headers.get("Content-Type", ""),
             "response": parsed if parsed is not None else decoded[:500],
         }
+        if parsed is None:
+            # Validation needs the complete SSE body, but reports stay compact.
+            result["_raw_response"] = decoded
+            if len(decoded) > 500:
+                result["response_truncated"] = True
+        return result
     except Exception as exc:  # noqa: BLE001 - probes report errors instead of aborting
         return {
             "name": name,
@@ -68,6 +74,35 @@ def _has_chat_choice(response: Any) -> bool:
     )
 
 
+def _first_choice(response: Any) -> dict[str, Any] | None:
+    if not _has_chat_choice(response):
+        return None
+    return response["choices"][0]
+
+
+def _streamed_content(body: str) -> tuple[str, bool]:
+    content: list[str] = []
+    done = False
+    for line in body.splitlines():
+        if not line.startswith("data:"):
+            continue
+        data = line.removeprefix("data:").strip()
+        if data == "[DONE]":
+            done = True
+            continue
+        try:
+            event = json.loads(data)
+        except json.JSONDecodeError:
+            continue
+        choice = _first_choice(event)
+        if choice is None:
+            continue
+        delta = choice.get("delta", {})
+        if isinstance(delta, dict) and isinstance(delta.get("content"), str):
+            content.append(delta["content"])
+    return "".join(content), done
+
+
 def _validate_probe(probe: dict[str, Any]) -> None:
     if not probe.get("ok"):
         return
@@ -75,15 +110,44 @@ def _validate_probe(probe: dict[str, Any]) -> None:
     name = probe["name"]
     valid = True
     if name == "chat":
-        valid = _has_chat_choice(response)
+        choice = _first_choice(response)
+        message = choice.get("message", {}) if choice is not None else {}
+        valid = (
+            isinstance(message, dict)
+            and isinstance(message.get("content"), str)
+            and message["content"].strip() == "OMB_OK"
+            and choice.get("finish_reason") != "length"
+        )
     elif name == "streaming":
         content_type = str(probe.get("content_type", "")).lower()
-        valid = "text/event-stream" in content_type or (isinstance(response, str) and "data:" in response)
+        body = probe.get("_raw_response", response)
+        streamed_text, done = _streamed_content(body if isinstance(body, str) else "")
+        valid = "text/event-stream" in content_type and done and streamed_text.strip() == "OMB_OK"
     elif name == "tool_calling":
-        valid = _has_chat_choice(response)
+        choice = _first_choice(response)
+        message = choice.get("message", {}) if choice is not None else {}
+        tool_calls = message.get("tool_calls", []) if isinstance(message, dict) else []
+        valid = (
+            choice is not None
+            and choice.get("finish_reason") != "length"
+            and isinstance(tool_calls, list)
+            and bool(tool_calls)
+        )
         if valid:
-            message = response["choices"][0].get("message", {})
-            valid = isinstance(message, dict) and bool(message.get("tool_calls"))
+            first_call = tool_calls[0]
+            function = first_call.get("function", {}) if isinstance(first_call, dict) else {}
+            arguments = function.get("arguments", {}) if isinstance(function, dict) else {}
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except json.JSONDecodeError:
+                    arguments = None
+            valid = (
+                isinstance(function, dict)
+                and function.get("name") == "get_omb_status"
+                and isinstance(arguments, dict)
+                and arguments.get("component") == "endpoint"
+            )
     if not valid:
         probe["ok"] = False
         probe["validation_error"] = f"response did not satisfy the {name} compatibility contract"
@@ -94,7 +158,8 @@ def check_target(target: TargetConfig, *, include_tools: bool = True) -> dict[st
         "model": target.model,
         "messages": [{"role": "user", "content": "Reply with exactly OMB_OK"}],
         "temperature": 0,
-        "max_tokens": 16,
+        # Reasoning models may consume completion tokens before emitting content.
+        "max_tokens": 256,
     }
     probes = [
         _probe("models", lambda: _request(target, "models", timeout=15)),
@@ -109,7 +174,7 @@ def check_target(target: TargetConfig, *, include_tools: bool = True) -> dict[st
             "model": target.model,
             "messages": [{"role": "user", "content": "Call get_omb_status with component='endpoint'."}],
             "temperature": 0,
-            "max_tokens": 64,
+            "max_tokens": 512,
             "tools": [
                 {
                     "type": "function",
@@ -131,6 +196,7 @@ def check_target(target: TargetConfig, *, include_tools: bool = True) -> dict[st
 
     for probe in probes:
         _validate_probe(probe)
+        probe.pop("_raw_response", None)
 
     required = {"chat", "streaming"}
     if include_tools:
